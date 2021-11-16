@@ -10,6 +10,7 @@
 
 import Foundation
 import Markdown
+import SymbolKit
 
 protocol RenderContent {}
 extension RenderBlockContent: RenderContent {}
@@ -131,36 +132,40 @@ struct RenderContentCompiler: MarkupVisitor {
         collectedTopicReferences.append(resolved)
         return [RenderInlineContent.reference(identifier: .init(resolved.absoluteString), isActive: true, overridingTitle: nil, overridingTitleInlineContent: nil)]
     }
-    
-    mutating func visitSymbolLink(_ symbolLink: SymbolLink) -> [RenderContent] {
-        var resolvedReference: ResolvedTopicReference? = nil
 
-        guard let destination = symbolLink.destination else {
-            return []
-        }
-        
+    func resolveSymbolReference(destination: String) -> TopicGraph.Node? {
+        var resolvedReference: ResolvedTopicReference? = nil
         // Try absolute path
         if let cached = context.referenceFor(absoluteSymbolPath: destination, parent: identifier) {
             resolvedReference = cached
         }
-        
+
         // Try local context
         if let unresolved = ValidatedURL(destination).map(UnresolvedTopicReference.init(topicURL:)),
             case let .success(resolved) = context.resolve(.unresolved(unresolved), in: identifier, fromSymbolLink: true) {
                 resolvedReference = resolved
         }
 
-        guard let resolved = resolvedReference else {
+        // We resolved the reference, check if it's a node that can be linked to.
+        guard let resolved = resolvedReference,
+              let node = context.topicGraph.nodeWithReference(resolved),
+              context.topicGraph.isLinkable(node.reference) else {
+                  return nil
+              }
+
+        return node
+    }
+    
+    mutating func visitSymbolLink(_ symbolLink: SymbolLink) -> [RenderContent] {
+        guard let destination = symbolLink.destination else {
+            return []
+        }
+        guard let resolvedNode = resolveSymbolReference(destination: destination) else {
             return [RenderInlineContent.codeVoice(code: destination)]
         }
-        // We resolved the reference, check if it's a node that can be linked to.
-        if let node = context.topicGraph.nodeWithReference(resolved) {
-            guard context.topicGraph.isLinkable(node.reference) else {
-                return [RenderInlineContent.codeVoice(code: destination)]
-            }
-        }
-        collectedTopicReferences.append(resolved)
-        return [RenderInlineContent.reference(identifier: .init(resolved.absoluteString), isActive: true, overridingTitle: nil, overridingTitleInlineContent: nil)]
+        collectedTopicReferences.append(resolvedNode.reference)
+
+        return [RenderInlineContent.reference(identifier: .init(resolvedNode.reference.absoluteString), isActive: true, overridingTitle: nil, overridingTitleInlineContent: nil)]
     }
     
     mutating func visitSoftBreak(_ softBreak: SoftBreak) -> [RenderContent] {
@@ -205,6 +210,44 @@ struct RenderContentCompiler: MarkupVisitor {
 
     mutating func visitStrikethrough(_ strikethrough: Strikethrough) -> [RenderContent] {
         return [RenderInlineContent.strikethrough(inlineContent: strikethrough.children.reduce(into: [], { result, child in result.append(contentsOf: visit(child))}) as! [RenderInlineContent])]
+    }
+
+    mutating func visitBlockDirective(_ blockDirective: BlockDirective) -> [RenderContent] {
+        switch blockDirective.name {
+        case Snippet.directiveName:
+            guard let snippetURL = blockDirective.arguments()[Snippet.Semantics.Path.argumentName],
+                  let snippetNode = resolveSymbolReference(destination: snippetURL.value),
+                  let snippetEntity = try? context.entity(with: snippetNode.reference),
+                  let snippetSymbol = snippetEntity.symbol,
+                  let snippetMixin = snippetSymbol.mixins[SymbolGraph.Symbol.Snippet.mixinKey] as? SymbolGraph.Symbol.Snippet else {
+                return []
+            }
+
+            let docCommentContent = snippetEntity.markup.children.flatMap { self.visit($0) }
+
+            let codeContent = snippetMixin.chunks.flatMap { chunk -> [RenderContent] in
+                guard !chunk.code.isEmpty else {
+                    return []
+                }
+
+                var elements = [RenderContent]()
+
+                if let chunkName = chunk.name {
+                    elements.append(RenderBlockContent.paragraph(inlineContent: [
+                        RenderInlineContent.strong(inlineContent: [
+                            RenderInlineContent.text(chunkName)
+                        ])
+                    ]))
+                }
+
+                elements.append(RenderBlockContent.codeListing(syntax: chunk.language, code: [chunk.code], metadata: nil))
+                return elements
+            }
+
+            return docCommentContent + codeContent
+        default:
+            return []
+        }
     }
 
     func defaultVisit(_ markup: Markup) -> [RenderContent] {

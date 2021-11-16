@@ -140,7 +140,8 @@ public class DocumentationContext: DocumentationContextDataProviderDelegate {
     /// The root module nodes of the Topic Graph.
     public var rootModules: [ResolvedTopicReference] {
         return topicGraph.nodes.values.compactMap { node in
-            guard node.kind == .module else {
+            guard node.kind == .module,
+                  !onlyHasSnippetRelatedChildren(for: node.reference) else {
                 return nil
             }
             return node.reference
@@ -2174,6 +2175,17 @@ public class DocumentationContext: DocumentationContextDataProviderDelegate {
         // Check if `destination` is a known absolute symbol path.
         let referenceURLString = "doc://\(parent.bundleIdentifier)/documentation/\(path.hasPrefix("/") ? String(path.dropFirst()) : path)"
         return referencesIndex[referenceURLString]
+    }
+
+    /// Returns whether a documentation node only has snippet or snippet group children.
+    func onlyHasSnippetRelatedChildren(for reference: ResolvedTopicReference) -> Bool {
+        let children = children(of: reference)
+        guard !children.isEmpty else {
+            return false
+        }
+        return children
+            .compactMap { $0.kind }
+            .allSatisfy({ $0 == .snippet || $0 == .snippetGroup })
     }
     
     /**
