@@ -1329,13 +1329,16 @@ public struct RenderNodeTranslator: SemanticVisitor {
                 }
             } ?? .init(defaultValue: nil)
         }
-        
+
+        let mentioningArticles = context.articleSymbolMentions.articlesMentioning(identifier)
+
         node.primaryContentSectionsVariants.append(
             contentsOf: createRenderSections(
                 for: symbol,
                 renderNode: &node,
                 translators: [
                     DeclarationsSectionTranslator(),
+                    MentionedInSectionTranslator(articles: mentioningArticles),
                     HTTPEndpointSectionTranslator(endpointType: .production),
                     HTTPEndpointSectionTranslator(endpointType: .sandbox),
                     ParametersSectionTranslator(),

@@ -297,8 +297,10 @@ public class DocumentationContext: DocumentationContextDataProviderDelegate {
 
     /// External metadata injected into the context, for example via command line arguments.
     public var externalMetadata = ExternalMetadata()
-    
-    
+
+    /// Mentions of symbols within articles.
+    var articleSymbolMentions = ArticleSymbolMentions()
+
     /// The decoder used in the `SymbolGraphLoader`
     var decoder: JSONDecoder = JSONDecoder()
     
@@ -647,6 +649,20 @@ public class DocumentationContext: DocumentationContextDataProviderDelegate {
 
         for result in results.sync({ $0 }) {
             documentationCache[result.reference] = result.node
+
+            // Record symbol links as symbol "mentions" for automatic cross references
+            // on rendered symbol documentation.
+            if case .article = result.node.kind,
+               let article = result.node.semantic as? Article {
+                var mentions = SymbolLinkCollector(context: self, article: result.node.reference)
+                for markup in article.abstractSection?.content ?? [] {
+                    mentions.visit(markup)
+                }
+                for markup in article.discussion?.content ?? [] {
+                    mentions.visit(markup)
+                }
+            }
+            
             assert(
                 // If this is a symbol, verify that the reference exist in the in the symbolIndex
                 result.node.symbol.map { symbolIndex[$0.identifier.precise] == result.reference }
@@ -1889,7 +1905,7 @@ public class DocumentationContext: DocumentationContextDataProviderDelegate {
             for anchor in documentation.anchorSections {
                 nodeAnchorSections[anchor.reference] = anchor
             }
-            
+
             var article = article
             // Update the article's topic graph node with the one we just added to the topic graph.
             article.topicGraphNode = graphNode
