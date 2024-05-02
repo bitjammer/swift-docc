@@ -27,14 +27,23 @@ public struct AutomaticCuration {
         }
     }
     
-    /// A mapping between a symbol kind and its matching group.
-    typealias ReferenceGroupIndex = [SymbolGraph.Symbol.KindIdentifier: ReferenceGroup]
-    
-    /// A static list of predefined groups for each supported kind of symbol.
+    /// A mapping between a group kind identifier string and its matching group.
+    typealias ReferenceGroupIndex = [String: ReferenceGroup]
+
+    /// A special group name for symbols that are deprecated across all of its platforms.
+    static let deprecatedGroupName = "Deprecated"
+
+    /// A static list of predefined groups for each supported kind of symbol,
+    /// along with a group that includes symbols deprecated across all platforms.
     static var groups: ReferenceGroupIndex {
-        return groupKindOrder.enumerated().reduce(into: ReferenceGroupIndex()) { (result, next) in
-            result[next.element] = ReferenceGroup(title: AutomaticCuration.groupTitle(for: next.element), sortOrder: next.offset)
+        var allGroups = groupKindOrder.enumerated().reduce(into: ReferenceGroupIndex()) { (result, next) in
+            result[next.element.identifier] = ReferenceGroup(title: AutomaticCuration.groupTitle(for: next.element), sortOrder: next.offset)
         }
+
+        // The deprecated group appears last.
+        allGroups[deprecatedGroupName] = ReferenceGroup(title: deprecatedGroupName, sortOrder: Int.max)
+        
+        return allGroups
     }
     
     /// Automatic curation task group.
@@ -59,7 +68,7 @@ public struct AutomaticCuration {
         // it can't correctly determine language specific automatic curation. Instead we ask the `PathHierarchy` which is source-language-aware.
         let children = context.linkResolver.localResolver.directDescendants(of: node.reference, languagesFilter: languagesFilter)
             .sorted(by: \.path)
-        
+
         return try topics(
             for: children,
             inInheritedSymbolsAPICollection: GeneratedDocumentationTopics.isInheritedSymbolsAPICollectionNode(node.reference, in: context.topicGraph),
@@ -101,7 +110,14 @@ public struct AutomaticCuration {
                 guard let childSymbol = childNode.semantic as? Symbol else {
                     return
                 }
-                
+
+                // Deprecated symbols go into a special group.
+                if let availability = childSymbol.availability,
+                   AvailabilityParser(availability).isDeprecated() {
+                    groupsIndex[deprecatedGroupName]?.references.append(reference)
+                    return
+                }
+
                 // If we have a specific trait to collect topics for, we only want
                 // to include children that have a kind available for that trait.
                 //
@@ -118,7 +134,7 @@ public struct AutomaticCuration {
                 }
                 
                 if let childSymbolKindIdentifier {
-                    groupsIndex[childSymbolKindIdentifier]?.references.append(reference)
+                    groupsIndex[childSymbolKindIdentifier.identifier]?.references.append(reference)
                 }
             }
             .lazy
